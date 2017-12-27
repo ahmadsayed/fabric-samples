@@ -53,42 +53,34 @@ app.use(bodyParser.urlencoded({
 }));
 // set secret variable
 app.set('secret', 'thisismysecret');
-app.use(expressJWT({
-	secret: 'thisismysecret'
-}).unless({
-	path: ['/users']
-}));
+//app.use(expressJWT({
+//	secret: 'thisismysecret'
+//}).unless({
+//	path: ['/users']
+//}));
+
 app.use(bearerToken());
-app.use(function(req, res, next) {
+app.use(function (req, res, next) {
 	if (req.originalUrl.indexOf('/users') >= 0) {
 		return next();
 	}
-
+	console.log(req.token);
 	var token = req.token;
-	jwt.verify(token, app.get('secret'), function(err, decoded) {
-		if (err) {
-			res.send({
-				success: false,
-				message: 'Failed to authenticate token. Make sure to include the ' +
-					'token returned from /users call in the authorization header ' +
-					' as a Bearer token'
-			});
-			return;
-		} else {
-			// add the decoded user name and org name to the request object
-			// for the downstream code to use
-			req.username = decoded.username;
-			req.orgname = decoded.orgName;
-			logger.debug(util.format('Decoded from JWT token: username - %s, orgname - %s', decoded.username, decoded.orgName));
-			return next();
-		}
-	});
+	var decoded = jwt.decode(token);
+	req.username = decoded['http://wso2.org/claims/username'];
+	req.orgname = decoded['http://wso2.org/claims/role'][0].split('/')[1];
+//	req.username = decoded.username;
+//	req.orgname = decoded.orgName;
+
+	logger.debug(util.format('Decoded from JWT token: username - %s, orgname - %s', decoded['http://wso2.org/claims/username'], decoded['http://wso2.org/claims/role'][0].split('/')[1]));
+	return next();
+
 });
 
 ///////////////////////////////////////////////////////////////////////////////
 //////////////////////////////// START SERVER /////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
-var server = http.createServer(app).listen(port, function() {});
+var server = http.createServer(app).listen(port, function () { });
 logger.info('****************** SERVER STARTED ************************');
 logger.info('**************  http://' + host + ':' + port +
 	'  ******************');
@@ -106,8 +98,10 @@ function getErrorMessage(field) {
 ///////////////////////// REST ENDPOINTS START HERE ///////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 // Register and enroll user
-app.post('/users', function(req, res) {
+var sso = require('./sso.js');
+app.post('/users', function (req, res) {
 	var username = req.body.username;
+	var password = req.body.password;
 	var orgName = req.body.orgName;
 	logger.debug('End point : /users');
 	logger.debug('User name : ' + username);
@@ -120,25 +114,38 @@ app.post('/users', function(req, res) {
 		res.json(getErrorMessage('\'orgName\''));
 		return;
 	}
+
+	if (!password) {
+		res.json(getErrorMessage('\'password\''));
+		return;
+	}
+	/*
 	var token = jwt.sign({
 		exp: Math.floor(Date.now() / 1000) + parseInt(hfc.getConfigSetting('jwt_expiretime')),
 		username: username,
 		orgName: orgName
 	}, app.get('secret'));
-	helper.getRegisteredUsers(username, orgName, true).then(function(response) {
-		if (response && typeof response !== 'string') {
-			response.token = token;
-			res.json(response);
-		} else {
-			res.json({
-				success: false,
-				message: response
+	*/
+	sso.getJWTTokenFromWSO2(username, password)
+		.then((token) => {
+			helper.getRegisteredUsers(username, orgName, true).then(function (response) {
+				if (response && typeof response !== 'string') {
+					response.token = token;
+					res.json(response);
+				} else {
+					res.json({
+						success: false,
+						message: response
+					});
+				}
 			});
 		}
-	});
+		)
+
+
 });
 // Create Channel
-app.post('/channels', function(req, res) {
+app.post('/channels', function (req, res) {
 	logger.info('<<<<<<<<<<<<<<<<< C R E A T E  C H A N N E L >>>>>>>>>>>>>>>>>');
 	logger.debug('End point : /channels');
 	var channelName = req.body.channelName;
@@ -155,12 +162,12 @@ app.post('/channels', function(req, res) {
 	}
 
 	channels.createChannel(channelName, channelConfigPath, req.username, req.orgname)
-	.then(function(message) {
-		res.send(message);
-	});
+		.then(function (message) {
+			res.send(message);
+		});
 });
 // Join Channel
-app.post('/channels/:channelName/peers', function(req, res) {
+app.post('/channels/:channelName/peers', function (req, res) {
 	logger.info('<<<<<<<<<<<<<<<<< J O I N  C H A N N E L >>>>>>>>>>>>>>>>>');
 	var channelName = req.params.channelName;
 	var peers = req.body.peers;
@@ -176,12 +183,12 @@ app.post('/channels/:channelName/peers', function(req, res) {
 	}
 
 	join.joinChannel(channelName, peers, req.username, req.orgname)
-	.then(function(message) {
-		res.send(message);
-	});
+		.then(function (message) {
+			res.send(message);
+		});
 });
 // Install chaincode on target peers
-app.post('/chaincodes', function(req, res) {
+app.post('/chaincodes', function (req, res) {
 	logger.debug('==================== INSTALL CHAINCODE ==================');
 	var peers = req.body.peers;
 	var chaincodeName = req.body.chaincodeName;
@@ -209,12 +216,12 @@ app.post('/chaincodes', function(req, res) {
 	}
 
 	install.installChaincode(peers, chaincodeName, chaincodePath, chaincodeVersion, req.username, req.orgname)
-	.then(function(message) {
-		res.send(message);
-	});
+		.then(function (message) {
+			res.send(message);
+		});
 });
 // Instantiate chaincode on target peers
-app.post('/channels/:channelName/chaincodes', function(req, res) {
+app.post('/channels/:channelName/chaincodes', function (req, res) {
 	logger.debug('==================== INSTANTIATE CHAINCODE ==================');
 	var chaincodeName = req.body.chaincodeName;
 	var chaincodeVersion = req.body.chaincodeVersion;
@@ -243,12 +250,12 @@ app.post('/channels/:channelName/chaincodes', function(req, res) {
 		return;
 	}
 	instantiate.instantiateChaincode(channelName, chaincodeName, chaincodeVersion, fcn, args, req.username, req.orgname)
-	.then(function(message) {
-		res.send(message);
-	});
+		.then(function (message) {
+			res.send(message);
+		});
 });
 // Invoke transaction on chaincode on target peers
-app.post('/channels/:channelName/chaincodes/:chaincodeName', function(req, res) {
+app.post('/channels/:channelName/chaincodes/:chaincodeName', function (req, res) {
 	logger.debug('==================== INVOKE ON CHAINCODE ==================');
 	var peers = req.body.peers;
 	var chaincodeName = req.params.chaincodeName;
@@ -277,12 +284,12 @@ app.post('/channels/:channelName/chaincodes/:chaincodeName', function(req, res) 
 	}
 
 	invoke.invokeChaincode(peers, channelName, chaincodeName, fcn, args, req.username, req.orgname)
-	.then(function(message) {
-		res.send(message);
-	});
+		.then(function (message) {
+			res.send(message);
+		});
 });
 // Query on chaincode on target peers
-app.get('/channels/:channelName/chaincodes/:chaincodeName', function(req, res) {
+app.get('/channels/:channelName/chaincodes/:chaincodeName', function (req, res) {
 	logger.debug('==================== QUERY BY CHAINCODE ==================');
 	var channelName = req.params.channelName;
 	var chaincodeName = req.params.chaincodeName;
@@ -316,12 +323,12 @@ app.get('/channels/:channelName/chaincodes/:chaincodeName', function(req, res) {
 	logger.debug(args);
 
 	query.queryChaincode(peer, channelName, chaincodeName, args, fcn, req.username, req.orgname)
-	.then(function(message) {
-		res.send(message);
-	});
+		.then(function (message) {
+			res.send(message);
+		});
 });
 //  Query Get Block by BlockNumber
-app.get('/channels/:channelName/blocks/:blockId', function(req, res) {
+app.get('/channels/:channelName/blocks/:blockId', function (req, res) {
 	logger.debug('==================== GET BLOCK BY NUMBER ==================');
 	let blockId = req.params.blockId;
 	let peer = req.query.peer;
@@ -334,12 +341,12 @@ app.get('/channels/:channelName/blocks/:blockId', function(req, res) {
 	}
 
 	query.getBlockByNumber(peer, blockId, req.username, req.orgname)
-		.then(function(message) {
+		.then(function (message) {
 			res.send(message);
 		});
 });
 // Query Get Transaction by Transaction ID
-app.get('/channels/:channelName/transactions/:trxnId', function(req, res) {
+app.get('/channels/:channelName/transactions/:trxnId', function (req, res) {
 	logger.debug(
 		'================ GET TRANSACTION BY TRANSACTION_ID ======================'
 	);
@@ -352,12 +359,12 @@ app.get('/channels/:channelName/transactions/:trxnId', function(req, res) {
 	}
 
 	query.getTransactionByID(peer, trxnId, req.username, req.orgname)
-		.then(function(message) {
+		.then(function (message) {
 			res.send(message);
 		});
 });
 // Query Get Block by Hash
-app.get('/channels/:channelName/blocks', function(req, res) {
+app.get('/channels/:channelName/blocks', function (req, res) {
 	logger.debug('================ GET BLOCK BY HASH ======================');
 	logger.debug('channelName : ' + req.params.channelName);
 	let hash = req.query.hash;
@@ -368,24 +375,24 @@ app.get('/channels/:channelName/blocks', function(req, res) {
 	}
 
 	query.getBlockByHash(peer, hash, req.username, req.orgname).then(
-		function(message) {
+		function (message) {
 			res.send(message);
 		});
 });
 //Query for Channel Information
-app.get('/channels/:channelName', function(req, res) {
+app.get('/channels/:channelName', function (req, res) {
 	logger.debug(
 		'================ GET CHANNEL INFORMATION ======================');
 	logger.debug('channelName : ' + req.params.channelName);
 	let peer = req.query.peer;
 
 	query.getChainInfo(peer, req.username, req.orgname).then(
-		function(message) {
+		function (message) {
 			res.send(message);
 		});
 });
 // Query to fetch all Installed/instantiated chaincodes
-app.get('/chaincodes', function(req, res) {
+app.get('/chaincodes', function (req, res) {
 	var peer = req.query.peer;
 	var installType = req.query.type;
 	//TODO: add Constnats
@@ -398,12 +405,12 @@ app.get('/chaincodes', function(req, res) {
 	}
 
 	query.getInstalledChaincodes(peer, installType, req.username, req.orgname)
-	.then(function(message) {
-		res.send(message);
-	});
+		.then(function (message) {
+			res.send(message);
+		});
 });
 // Query to fetch channels
-app.get('/channels', function(req, res) {
+app.get('/channels', function (req, res) {
 	logger.debug('================ GET CHANNELS ======================');
 	logger.debug('peer: ' + req.query.peer);
 	var peer = req.query.peer;
@@ -413,8 +420,8 @@ app.get('/channels', function(req, res) {
 	}
 
 	query.getChannels(peer, req.username, req.orgname)
-	.then(function(
-		message) {
-		res.send(message);
-	});
+		.then(function (
+			message) {
+			res.send(message);
+		});
 });
